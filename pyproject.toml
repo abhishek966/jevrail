@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "jevrail"
+version = "0.1.0"
+description = "Input and output guardrails for LangGraph agents, judged by the Jev model."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [{ name = "jevrail contributors" }]
+keywords = ["langgraph", "guardrails", "jev", "typesafe", "llm", "agents"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Security",
+]
+dependencies = ["PyYAML>=6"]
+
+[project.optional-dependencies]
+langgraph = ["langgraph>=1.0", "langchain>=1.0"]
+typesafe = ["langchain-typesafe"]
+dev = ["pytest>=8", "langgraph>=1.0", "langchain>=1.0"]
+
+[project.urls]
+Homepage = "https://pypi.org/project/jevrail/"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/jevrail"]
+
+[tool.hatch.build.targets.wheel.sources]
+"src" = ""
+
+[tool.hatch.build.targets.sdist]
+include = ["src/jevrail", "tests", "examples", "README.md", "LICENSE"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
