@@ -18,21 +18,6 @@ class Message:
         self.id = message_id
 
 
-class Request:
-    def __init__(self, messages):
-        self.messages = messages
-
-    def override(self, **kwargs):
-        data = dict(self.__dict__)
-        data.update(kwargs)
-        return Request(data["messages"])
-
-
-class Response:
-    def __init__(self, messages):
-        self.result = messages
-
-
 def rail(scores, **policy_kwargs):
     policy = GuardPolicy(
         stages={
@@ -59,23 +44,34 @@ def test_before_model_allows_clean_input():
     assert guard.before_model({"messages": [Message("user", "hello")]}, runtime=None) is None
 
 
-def test_wrap_model_call_redacts_pii_before_the_model_sees_it():
+def test_before_model_redacts_pii_in_place_before_the_model_sees_it():
     policy = GuardPolicy(
         stages={"input": ["pii"], "output": ["content_safety"]},
         actions={"pii": "redact"},
     )
     guard = JevRail(policy, engine=GuardEngine(policy, FakeClassifier({"pii": 0.0, "content_safety": 0.0})))
-    seen = {}
-
-    def handler(request):
-        seen["text"] = request.messages[-1].content
-        return Response([Message("assistant", "ok", "2")])
-
-    guard.wrap_model_call(
-        Request([Message("user", "email me at user@example.com")]),
-        handler,
+    update = guard.before_model(
+        {"messages": [Message("user", "email me at user@example.com", "u1")]},
+        runtime=None,
     )
-    assert "user@example.com" not in seen["text"]
+    assert "jump_to" not in update
+    assert update["messages"][0].id == "u1"
+    assert "user@example.com" not in update["messages"][0].content
+    assert "[REDACTED]" in update["messages"][0].content
+
+
+def test_before_model_judges_input_once():
+    seen = []
+
+    class Counting(FakeClassifier):
+        def score(self, text, questions):
+            seen.append(text)
+            return super().score(text, questions)
+
+    policy = GuardPolicy(stages={"input": ["prompt_injection"]})
+    guard = JevRail(policy, engine=GuardEngine(policy, Counting({})))
+    guard.before_model({"messages": [Message("user", "hello")]}, runtime=None)
+    assert seen == ["hello"]
 
 
 def test_after_model_blocks_unsafe_output():
@@ -102,3 +98,19 @@ def test_wrap_tool_call_blocks_denied_tool_without_running_it():
     result = guard.wrap_tool_call(ToolRequest(), handler)
     assert called["ran"] is False
     assert "can't help" in result.content.lower()
+
+
+def test_denied_tool_blocks_even_when_tool_stages_are_off():
+    policy = GuardPolicy(stages={"input": ["prompt_injection"]}, denied_tools=("bash",))
+    guard = JevRail(policy, engine=GuardEngine(policy, FakeClassifier({})))
+    called = {"ran": False}
+
+    class ToolRequest:
+        tool_call = {"name": "bash", "args": {"cmd": "ls"}, "id": "call-1"}
+
+    def handler(request):
+        called["ran"] = True
+        return Message("tool", "ok", "call-1")
+
+    guard.wrap_tool_call(ToolRequest(), handler)
+    assert called["ran"] is False

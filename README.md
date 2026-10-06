@@ -49,6 +49,8 @@ app = guard(compiled, policy)
 app.invoke({"messages": [{"role": "user", "content": "Hello"}]})
 ```
 
+`app.stream` and `app.astream` run the whole graph, check the final answer, then yield the chunks, with redactions applied or a single refusal in their place. They accept `stream_mode` `"values"` or `"updates"`, alone or as a list, and `subgraphs=True`. Token streaming (`"messages"`) and `"custom"` raise `ValueError`, because those chunks would reach the caller before the output check.
+
 A custom graph, on the edges you choose:
 
 ```python
@@ -76,9 +78,9 @@ graph.add_node("output_guard", output_guard(policy))
 | `indirect_injection` | tool result | block |
 | `topic_scope` | input or output, with `allowed_topics` | block |
 
-`denied_tools` blocks a tool by name on the tool-call stage without a Jev call.
+`denied_tools` blocks a tool by name before it runs, without a Jev call. It applies whether or not `tool_call` is listed in `stages`.
 
-Emails, SSNs, card numbers, API keys, and private keys are masked by a local scanner. Jev says a secret is present. The scanner finds the span. If Jev flags PII or a secret and the scanner finds no span, the action becomes a block.
+When `pii` or `secrets` is enabled, a local scanner masks the emails, SSNs, card numbers, API keys, and private keys it recognizes on every pass, whatever Jev scores. Jev covers what a pattern cannot see. If Jev flags PII or a secret and the scanner finds no span to mask, the action becomes a block.
 
 If the TypeSafe API fails, `fail_mode="closed"` blocks the turn. `fail_mode="open"` lets it through.
 

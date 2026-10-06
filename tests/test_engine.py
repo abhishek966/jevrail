@@ -141,3 +141,32 @@ def test_denied_tool_blocks_without_jev():
     decision = engine.judge("tool_call", "bash ls", tool_name="bash")
     assert decision.action == "block"
     assert seen == []
+
+
+def test_denied_tool_blocks_when_tool_call_stage_is_not_listed():
+    seen = []
+    engine = GuardEngine(
+        policy(stages={"input": ["prompt_injection"]}, denied_tools=("bash",)),
+        FakeClassifier({}, seen),
+    )
+    assert engine.judge("tool_call", "bash ls", tool_name="bash").action == "block"
+    assert engine.judge("tool_call", "search", tool_name="search").action == "allow"
+    assert seen == []
+
+
+def test_scanner_redacts_even_when_jev_scores_low():
+    engine = GuardEngine(
+        policy(stages={"output": ["pii"]}),
+        FakeClassifier({"pii": 0.01}),
+    )
+    decision = engine.judge("output", "Mail me at user@example.com")
+    assert decision.action == "redact"
+    assert decision.hits[0].score == 1.0
+
+
+def test_jev_pii_without_a_scanner_span_blocks():
+    engine = GuardEngine(
+        policy(stages={"output": ["pii"]}),
+        FakeClassifier({"pii": 0.95}),
+    )
+    assert engine.judge("output", "She lives at the blue house on Elm Street").action == "block"

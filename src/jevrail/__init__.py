@@ -6,7 +6,7 @@ from jevrail.adapters.nodes import input_guard, output_guard
 from jevrail.engine import Decision, GuardEngine, GuardrailBlocked, Hit
 from jevrail.policy import GuardPolicy
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 __all__ = [
     "Decision",

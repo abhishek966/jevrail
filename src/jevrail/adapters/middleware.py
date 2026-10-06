@@ -49,22 +49,14 @@ def _tool_message(content: str, tool_call_id: str | None) -> Any:
         return message
 
 
-def _model_response(messages: list[Any]) -> Any:
-    try:
-        from langchain.agents.middleware import ModelResponse
-
-        return ModelResponse(result=messages)
-    except ImportError:
-        return type("ModelResponse", (), {"result": messages})()
-
-
 class JevRail(AgentMiddleware):
     """LangChain ``create_agent`` middleware.
 
-    ``before_model`` blocks unsafe user or tool text. ``after_model`` blocks
-    unsafe model text. ``wrap_model_call`` redacts input before the model sees
-    it. ``wrap_tool_call`` covers tool calls and tool results when those stages
-    are listed on the policy.
+    ``before_model`` checks the latest user or tool text once per model call:
+    it blocks, or replaces the message in state with a redacted copy before the
+    model sees it. ``after_model`` does the same for model text.
+    ``wrap_tool_call`` covers tool calls and tool results when those stages are
+    listed on the policy, and always enforces ``denied_tools``.
     """
 
     def __init__(
@@ -83,10 +75,15 @@ class JevRail(AgentMiddleware):
         if found is None:
             return None
         decision = self.engine.judge("input", found[2])
-        if decision.action != "block":
-            return None
-        self._raise_if_needed(decision)
-        return {"messages": [_ai(decision.refusal or self.policy.refusal_message)], "jump_to": "end"}
+        if decision.action == "block":
+            self._raise_if_needed(decision)
+            return {
+                "messages": [_ai(decision.refusal or self.policy.refusal_message)],
+                "jump_to": "end",
+            }
+        if decision.action == "redact":
+            return {"messages": [with_content(found[1], decision.text)]}
+        return None
 
     @hook_config(can_jump_to=["end"])
     def after_model(self, state: dict[str, Any], runtime: Any) -> dict[str, Any] | None:
@@ -103,20 +100,6 @@ class JevRail(AgentMiddleware):
         if decision.action == "redact":
             return {"messages": [with_content(found[1], decision.text)]}
         return None
-
-    def wrap_model_call(self, request: Any, handler: Any) -> Any:
-        messages = list(request.messages)
-        found = latest_text(messages, {"user", "tool"})
-        if found is not None:
-            index, message, text = found
-            decision = self.engine.judge("input", text)
-            if decision.action == "block":
-                self._raise_if_needed(decision)
-                return _model_response([_ai(decision.refusal or self.policy.refusal_message)])
-            if decision.action == "redact":
-                messages[index] = with_content(message, decision.text)
-                request = request.override(messages=messages)
-        return handler(request)
 
     def wrap_tool_call(self, request: Any, handler: Any) -> Any:
         name, args, call_id = _tool_parts(request)
@@ -139,23 +122,6 @@ class JevRail(AgentMiddleware):
 
     async def aafter_model(self, state: dict[str, Any], runtime: Any) -> dict[str, Any] | None:
         return self.after_model(state, runtime)
-
-    async def awrap_model_call(self, request: Any, handler: Any) -> Any:
-        messages = list(request.messages)
-        found = latest_text(messages, {"user", "tool"})
-        if found is not None:
-            index, message, text = found
-            decision = self.engine.judge("input", text)
-            if decision.action == "block":
-                self._raise_if_needed(decision)
-                return _model_response([_ai(decision.refusal or self.policy.refusal_message)])
-            if decision.action == "redact":
-                messages[index] = with_content(message, decision.text)
-                request = request.override(messages=messages)
-        result = handler(request)
-        if hasattr(result, "__await__"):
-            result = await result
-        return result
 
     async def awrap_tool_call(self, request: Any, handler: Any) -> Any:
         name, args, call_id = _tool_parts(request)

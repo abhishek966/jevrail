@@ -4,26 +4,27 @@ from __future__ import annotations
 
 
 class TypeSafeJevClassifier:
-    """Score many yes/no questions in one TypeSafe Jev call."""
+    """Score many yes/no questions in one TypeSafe Jev call.
 
-    def __init__(self) -> None:
+    ``classifier`` is a configured ``langchain_typesafe.TypeSafeClassifier``.
+    By default one is built from ``TYPESAFE_API_KEY`` and ``TYPESAFE_BASE_URL``.
+    """
+
+    def __init__(self, classifier: object | None = None) -> None:
         from langchain_typesafe import Noul, TypeSafeClassifier
 
         self._noul = Noul
-        self._classifier = TypeSafeClassifier()
+        self._classifier = classifier if classifier is not None else TypeSafeClassifier()
 
     def score(self, text: str, questions: dict[str, str]) -> dict[str, float]:
         response = self._classifier.invoke(
-            state=text,
-            questions={
-                name: self._noul(instructions=instructions)
-                for name, instructions in questions.items()
-            },
+            {
+                "state": text,
+                "questions": {
+                    name: self._noul(instructions=instructions)
+                    for name, instructions in questions.items()
+                },
+            }
         )
-        nouls = getattr(response, "nouls", {}) or {}
-        scores: dict[str, float] = {}
-        for name in questions:
-            item = nouls[name]
-            value = getattr(item, "noul", item)
-            scores[name] = float(value)
-        return scores
+        nouls = response.nouls
+        return {name: float(nouls[name].noul) for name in questions}

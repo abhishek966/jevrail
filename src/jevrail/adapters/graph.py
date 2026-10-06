@@ -1,15 +1,99 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
+from dataclasses import dataclass
 from typing import Any
 
 from jevrail.engine import GuardEngine, GuardrailBlocked
-from jevrail.messages import latest_text, with_content
+from jevrail.messages import latest_text, message_role, message_text, with_content
 from jevrail.policy import GuardPolicy
+
+STREAM_MODES = frozenset({"values", "updates"})
+
+
+@dataclass(frozen=True)
+class _StreamLayout:
+    """How LangGraph shapes stream chunks for one ``stream`` call."""
+
+    modes: tuple[str, ...]
+    multi: bool
+    subgraphs: bool
+
+    def unpack(self, chunk: Any) -> tuple[tuple, str, Any]:
+        if self.subgraphs and self.multi:
+            namespace, mode, payload = chunk
+            return tuple(namespace), mode, payload
+        if self.subgraphs:
+            namespace, payload = chunk
+            return tuple(namespace), self.modes[0], payload
+        if self.multi:
+            mode, payload = chunk
+            return (), mode, payload
+        return (), self.modes[0], chunk
+
+    def pack(self, namespace: tuple, mode: str, payload: Any) -> Any:
+        if self.subgraphs and self.multi:
+            return (namespace, mode, payload)
+        if self.subgraphs:
+            return (namespace, payload)
+        if self.multi:
+            return (mode, payload)
+        return payload
+
+    def refusal(self, text: str, node: str) -> list[Any]:
+        message = {"role": "assistant", "content": text}
+        chunks = []
+        for mode in self.modes:
+            if mode == "values":
+                payload: dict[str, Any] = {"messages": [message]}
+            else:
+                payload = {node: {"messages": [message]}}
+            chunks.append(self.pack((), mode, payload))
+        return chunks
+
+
+def _updates(mode: str, payload: Any) -> list[Any]:
+    if mode == "values":
+        return [payload]
+    return list(payload.values()) if isinstance(payload, dict) else []
+
+
+def _payload_messages(mode: str, payload: Any) -> list[Any]:
+    found: list[Any] = []
+    for update in _updates(mode, payload):
+        if isinstance(update, dict) and "messages" in update:
+            value = update["messages"]
+            found.extend(value if isinstance(value, (list, tuple)) else [value])
+    return found
+
+
+def _rewrite_payload(mode: str, payload: Any, rewrite: Callable[[Any], Any]) -> Any:
+    def fix(update: Any) -> Any:
+        if not isinstance(update, dict) or "messages" not in update:
+            return update
+        value = update["messages"]
+        copied = dict(update)
+        if isinstance(value, (list, tuple)):
+            copied["messages"] = [rewrite(message) for message in value]
+        else:
+            copied["messages"] = rewrite(value)
+        return copied
+
+    if mode == "values":
+        return fix(payload)
+    if isinstance(payload, dict):
+        return {node: fix(update) for node, update in payload.items()}
+    return payload
 
 
 class GuardedGraph:
-    """Wraps a compiled LangGraph graph. Input is checked before the graph runs."""
+    """Wraps a compiled LangGraph graph. Input is checked before the graph runs.
+
+    ``stream`` and ``astream`` buffer the whole run, check the final answer,
+    then yield. Only ``stream_mode`` ``"values"`` and ``"updates"`` are
+    supported, because token streaming would reach the caller before the
+    output check.
+    """
 
     def __init__(self, graph: Any, policy: GuardPolicy, engine: GuardEngine) -> None:
         self.graph = graph
@@ -32,27 +116,38 @@ class GuardedGraph:
         return self._guard_output(await self.graph.ainvoke(prepared, config, **kwargs))
 
     def stream(self, data: Any, config: Any = None, **kwargs: Any) -> Iterator[Any]:
-        yield from self._stream(data, config, **kwargs)
-
-    async def astream(self, data: Any, config: Any = None, **kwargs: Any) -> AsyncIterator[Any]:
+        layout = self._stream_layout(kwargs)
         prepared, blocked = self._prepare_input(data)
         if blocked:
-            yield prepared
-            return
-        chunks = []
-        async for chunk in self.graph.astream(prepared, config, **kwargs):
-            chunks.append(chunk)
-        guarded = self._guard_chunks(chunks)
-        for chunk in guarded:
-            yield chunk
-
-    def _stream(self, data: Any, config: Any = None, **kwargs: Any) -> Iterator[Any]:
-        prepared, blocked = self._prepare_input(data)
-        if blocked:
-            yield prepared
+            yield from layout.refusal(self.policy.refusal_message, "input_guard")
             return
         chunks = list(self.graph.stream(prepared, config, **kwargs))
-        yield from self._guard_chunks(chunks)
+        yield from self._guard_chunks(chunks, layout)
+
+    async def astream(self, data: Any, config: Any = None, **kwargs: Any) -> AsyncIterator[Any]:
+        layout = self._stream_layout(kwargs)
+        prepared, blocked = self._prepare_input(data)
+        if blocked:
+            for chunk in layout.refusal(self.policy.refusal_message, "input_guard"):
+                yield chunk
+            return
+        chunks = [chunk async for chunk in self.graph.astream(prepared, config, **kwargs)]
+        for chunk in self._guard_chunks(chunks, layout):
+            yield chunk
+
+    def _stream_layout(self, kwargs: dict[str, Any]) -> _StreamLayout:
+        mode = kwargs.get("stream_mode")
+        if mode is None:
+            mode = getattr(self.graph, "stream_mode", None) or "values"
+        multi = isinstance(mode, (list, tuple))
+        modes = tuple(mode) if multi else (mode,)
+        unsupported = [name for name in modes if name not in STREAM_MODES]
+        if unsupported or not modes:
+            raise ValueError(
+                f"jevrail can only guard stream_mode 'values' or 'updates', got {list(modes)}. "
+                "Token and custom streams reach the caller before the output check runs."
+            )
+        return _StreamLayout(modes=modes, multi=multi, subgraphs=bool(kwargs.get("subgraphs")))
 
     def _prepare_input(self, data: Any) -> tuple[Any, bool]:
         if isinstance(data, str):
@@ -101,20 +196,34 @@ class GuardedGraph:
         copied["messages"] = messages
         return copied
 
-    def _guard_chunks(self, chunks: list[Any]) -> list[Any]:
-        assistant = None
+    def _guard_chunks(self, chunks: list[Any], layout: _StreamLayout) -> list[Any]:
+        answer = None
         for chunk in chunks:
-            if isinstance(chunk, dict) and "messages" in chunk:
-                found = latest_text(list(chunk["messages"]), {"assistant"})
-                if found is not None:
-                    assistant = found[2]
-        if assistant is None:
+            namespace, mode, payload = layout.unpack(chunk)
+            if namespace:
+                continue
+            for message in _payload_messages(mode, payload):
+                if message_role(message) == "assistant":
+                    answer = message_text(message)
+        if answer is None:
             return chunks
-        decision = self.engine.judge("output", assistant)
+        decision = self.engine.judge("output", answer)
         if decision.action == "block":
             self._raise_if_needed(decision)
-            return [self._refusal_state()]
-        return chunks
+            return layout.refusal(decision.refusal or self.policy.refusal_message, "output_guard")
+        if decision.action != "redact":
+            return chunks
+
+        def rewrite(message: Any) -> Any:
+            if message_role(message) == "assistant" and message_text(message) == answer:
+                return with_content(message, decision.text)
+            return message
+
+        guarded = []
+        for chunk in chunks:
+            namespace, mode, payload = layout.unpack(chunk)
+            guarded.append(layout.pack(namespace, mode, _rewrite_payload(mode, payload, rewrite)))
+        return guarded
 
     def _refusal_state(self) -> dict[str, Any]:
         return {"messages": [{"role": "assistant", "content": self.policy.refusal_message}]}

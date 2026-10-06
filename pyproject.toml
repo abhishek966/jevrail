@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "jevrail"
-version = "0.1.0"
+version = "0.1.1"
 description = "Input and output guardrails for LangGraph agents, judged by the Jev model."
 readme = "README.md"
 requires-python = ">=3.10"

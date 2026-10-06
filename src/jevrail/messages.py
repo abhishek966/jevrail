@@ -4,8 +4,17 @@ import copy
 from typing import Any
 
 
+def _is_pair(message: Any) -> bool:
+    return isinstance(message, tuple) and len(message) == 2 and isinstance(message[0], str)
+
+
 def message_text(message: Any) -> str:
-    content = message.get("content") if isinstance(message, dict) else getattr(message, "content", "")
+    if _is_pair(message):
+        content = message[1]
+    elif isinstance(message, dict):
+        content = message.get("content")
+    else:
+        content = getattr(message, "content", "")
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -20,7 +29,9 @@ def message_text(message: Any) -> str:
 
 
 def message_role(message: Any) -> str:
-    if isinstance(message, dict):
+    if _is_pair(message):
+        raw = message[0]
+    elif isinstance(message, dict):
         raw = message.get("role") or message.get("type") or ""
     else:
         raw = getattr(message, "role", None) or getattr(message, "type", None) or ""
@@ -48,6 +59,8 @@ def latest_text(messages: list[Any], roles: set[str]) -> tuple[int, Any, str] | 
 
 
 def with_content(message: Any, content: str) -> Any:
+    if _is_pair(message):
+        return (message[0], content)
     if isinstance(message, dict):
         copied = dict(message)
         copied["content"] = content

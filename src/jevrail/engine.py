@@ -51,12 +51,7 @@ class GuardEngine:
 
     def judge(self, stage: str, text: str, tool_name: str | None = None) -> Decision:
         checks = list(self.policy.stages.get(stage) or [])
-        if (
-            stage == "tool_call"
-            and tool_name
-            and tool_name in self.policy.denied_tools
-            and stage in self.policy.stages
-        ):
+        if stage == "tool_call" and tool_name and tool_name in self.policy.denied_tools:
             return self._blocked(
                 stage,
                 [
