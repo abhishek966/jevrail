@@ -1,0 +1,1 @@
+jevrail[langgraph]==0.1.1

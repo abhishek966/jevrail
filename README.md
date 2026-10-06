@@ -84,6 +84,11 @@ When `pii` or `secrets` is enabled, a local scanner masks the emails, SSNs, card
 
 If the TypeSafe API fails, `fail_mode="closed"` blocks the turn. `fail_mode="open"` lets it through.
 
+## Examples
+
+- `examples/demo` is a two-node agent that shows allow, block, and redact through `invoke` and `stream`. It runs offline with a stand-in classifier, or against Jev with `--live`.
+- `examples/create_agent.py` and `examples/custom_graph.py` show the middleware and the guard nodes.
+
 ## Publish
 
 Do not create an empty project on PyPI. The name is claimed by the first upload.
