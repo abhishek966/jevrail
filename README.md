@@ -89,15 +89,6 @@ If the TypeSafe API fails, `fail_mode="closed"` blocks the turn. `fail_mode="ope
 - `examples/demo` is a two-node agent that shows allow, block, and redact through `invoke` and `stream`. It runs offline with a stand-in classifier, or against Jev with `--live`.
 - `examples/create_agent.py` and `examples/custom_graph.py` show the middleware and the guard nodes.
 
-## Publish
-
-Do not create an empty project on PyPI. The name is claimed by the first upload.
-
-1. Register at pypi.org and test.pypi.org and turn on 2FA.
-2. `uv build` or `python -m build`.
-3. `twine upload --repository testpypi dist/*` and install it in a clean virtualenv.
-4. `twine upload dist/*` to create the `jevrail` project.
-
 ## Development
 
 ```bash
